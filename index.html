@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BOM RAG 組裝指導書生成器</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@300;400;500;700&display=swap');
+        body { font-family: 'Noto Sans TC', sans-serif; background-color: #f3f4f6; }
+        .log-container { background-color: #1e1e1e; color: #d4d4d4; font-family: 'Consolas', monospace; height: 400px; overflow-y: auto; font-size: 0.875rem; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto space-y-6">
+        <!-- 標題區 -->
+        <div class="bg-white rounded-xl shadow-md p-6">
+            <h1 class="text-2xl font-bold text-gray-800 flex items-center">
+                <i class="fas fa-robot text-blue-600 mr-3"></i>
+                BOM RAG 組裝指導書生成器
+            </h1>
+            <p class="text-gray-500 mt-1">上傳 BOM 表 Excel，自動經由向量檢索與 Gemini 生成 SOP。</p>
+        </div>
+
+        <!-- 操作區 -->
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <div class="md:col-span-1 space-y-4">
+                <div class="bg-white rounded-xl shadow-md p-6">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">步驟 1: 選擇檔案</label>
+                    <input type="file" id="fileInput" accept=".xlsx,.xls,.pdf" 
+                           class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100 cursor-pointer"/>
+                    
+                    <button id="startBtn" class="w-full mt-6 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition duration-200 disabled:bg-gray-400 disabled:cursor-not-allowed">
+                        <i class="fas fa-play mr-2"></i> 開始生成
+                    </button>
+                </div>
+
+                <!-- 下載區域 -->
+                <div id="downloadSection" class="hidden bg-green-50 border-2 border-green-200 rounded-xl p-6 text-center animate-bounce">
+                    <p class="text-green-800 font-bold mb-3">🎉 生成完成！</p>
+                    <a id="downloadLink" href="#" target="_blank" class="inline-block bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-full shadow-lg transition">
+                        <i class="fas fa-download mr-2"></i> 下載 Excel SOP
+                    </a>
+                </div>
+            </div>
+
+            <!-- Log 區域 -->
+            <div class="md:col-span-2">
+                <div class="bg-white rounded-xl shadow-md overflow-hidden">
+                    <div class="bg-gray-800 px-4 py-2 flex justify-between items-center">
+                        <span class="text-white text-sm font-bold"><i class="fas fa-terminal mr-2"></i>處理進度與日誌</span>
+                    </div>
+                    <div id="logContent" class="log-container p-4">
+                        <div class="text-gray-500 italic">等待任務啟動...</div>
+                    </div>
+                    <div class="p-4 border-t border-gray-100">
+                        <div class="w-full bg-gray-200 rounded-full h-2.5">
+                            <div id="progressBar" class="bg-blue-600 h-2.5 rounded-full transition-all duration-500" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const fileInput = document.getElementById('fileInput');
+        const startBtn = document.getElementById('startBtn');
+        const logContent = document.getElementById('logContent');
+        const progressBar = document.getElementById('progressBar');
+        const downloadSection = document.getElementById('downloadSection');
+        const downloadLink = document.getElementById('downloadLink');
+
+        // 請確保這裡的 port 與您運行的 uvicorn 一致 (8000)
+        const API_BASE = "http://127.0.0.1:8000";
+
+        function addLog(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = 'mb-1';
+            const timestamp = new Date().toLocaleTimeString();
+            let colorClass = 'text-gray-300';
+            if (type === 'success') colorClass = 'text-green-400';
+            if (type === 'error') colorClass = 'text-red-400';
+            if (type === 'process') colorClass = 'text-blue-400';
+
+            div.innerHTML = `<span class="text-gray-600">[${timestamp}]</span> <span class="${colorClass}">${message}</span>`;
+            logContent.appendChild(div);
+            logContent.scrollTop = logContent.scrollHeight;
+        }
+
+        startBtn.onclick = async () => {
+            const file = fileInput.files[0];
+            if (!file) {
+                alert("請先選擇一個 BOM 檔案！");
+                return;
+            }
+
+            // UI 狀態重設
+            startBtn.disabled = true;
+            downloadSection.classList.add('hidden');
+            logContent.innerHTML = '';
+            progressBar.style.width = '10%';
+            
+            addLog(`[SYSTEM] 開始處理檔案: ${file.name}`, 'process');
+
+            const formData = new FormData();
+            formData.append('file', file);
+
+            try {
+                const response = await fetch(`${API_BASE}/generate-sop`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`伺服器回應錯誤: ${response.status} - ${errorText}`);
+                }
+
+                const result = await response.json();
+                
+                if (result.success) {
+                    progressBar.style.width = '100%';
+                    addLog(`🎉 [SUCCESS] SOP 生成成功！`, 'success');
+                    
+                    // 顯示下載按鈕並設定正確網址
+                    // 確保 API 回傳的 download_url 有包含開頭斜線
+                    const url = result.download_url.startsWith('http') 
+                                ? result.download_url 
+                                : `${API_BASE}${result.download_url}`;
+                    
+                    downloadLink.href = url;
+                    downloadSection.classList.remove('hidden');
+                    addLog(`[INFO] 檔案已就緒: ${result.filename}`);
+                } else {
+                    addLog(`❌ [ERROR] ${result.error}`, 'error');
+                    if (result.stdout) addLog("--- 詳細 Log --- \n" + result.stdout);
+                }
+
+            } catch (error) {
+                addLog(`❌ [連線失敗] ${error.message}`, 'error');
+            } finally {
+                startBtn.disabled = false;
+            }
+        };
+    </script>
+</body>
+</html>
