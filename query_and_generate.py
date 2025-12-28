@@ -1,5 +1,6 @@
 import os
 import sys
+import certifi  # ✅ 修正 1：引入 certifi 來處理 SSL 憑證
 from pymongo import MongoClient
 from utils import AzureOpenAIAPI, GeminiAPI, load_config, print_progress
 from openpyxl import Workbook
@@ -8,7 +9,12 @@ from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
 def query_similar_boms(query_vector, config, top_k=3):
     """用向量相似度搜尋最相似的 BOM 模板"""
     try:
-        client = MongoClient(config['MONGODB']['connection_string'])
+        # ✅ 修正 2：加入 tlsCAFile=certifi.where() 解決 SSL handshake failed
+        client = MongoClient(
+            config['MONGODB']['connection_string'],
+            tlsCAFile=certifi.where()
+        )
+        
         db = client[config['MONGODB']['database_name']]
         collection = db[config['MONGODB']['collection_name']]
         
@@ -45,6 +51,13 @@ def query_similar_boms(query_vector, config, top_k=3):
         return results
     except Exception as e:
         print(f"❌ 資料庫搜尋發生錯誤: {e}")
+        # ✅ 新增：智慧錯誤提示
+        if "SSL handshake failed" in str(e) or "bad auth" in str(e):
+            print("\n⚠️  [連線問題排除建議]")
+            print("   1. 請確認伺服器已安裝憑證套件: pip install certifi")
+            print("   2. ★最可能原因★: MongoDB Atlas 的 'Network Access' (IP 白名單) 擋住了 GCP 的 IP。")
+            print("      -> 請至 MongoDB Atlas 後台 > Network Access > Add IP Address")
+            print("      -> 暫時加入 '0.0.0.0/0' (允許所有 IP) 以排除防火牆問題。")
         return []
 
 def create_styled_excel(steps, product_name, output_path):
