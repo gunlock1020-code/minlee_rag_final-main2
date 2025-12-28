@@ -8,7 +8,8 @@ import sys
 import glob
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles  # ✅ 關鍵修正：引入 StaticFiles
 from utils import load_config
 
 # 1. 設定日誌紀錄 (Logging)
@@ -44,9 +45,41 @@ else:
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# ==========================================
+#  ✅ 新增：網頁與靜態檔案路由 (解決 Not Found 問題)
+# ==========================================
+
+# 1. 輔助函式：取得 index.html
+async def get_index():
+    file_path = os.path.join(BASE_DIR, "index.html")
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+    # 如果找不到網頁，才回傳原本的 API 狀態 JSON
+    return JSONResponse(content={
+        "status": "BOM RAG API is running", 
+        "output_dir": OUTPUT_DIR,
+        "warning": "index.html not found in server root"
+    })
+
+# 2. 根目錄路由 -> 優先顯示網頁
 @app.get("/")
-def read_root():
-    return {"status": "BOM RAG API is running", "output_dir": OUTPUT_DIR}
+async def read_root():
+    return await get_index()
+
+# 3. 明確的 index.html 路由
+@app.get("/index.html")
+async def read_index_explicit():
+    return await get_index()
+
+# 4. (選用) 掛載 static 資料夾 (若您的網頁有引用 css/js)
+static_dir = os.path.join(BASE_DIR, "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    logger.info(f"已掛載靜態目錄: {static_dir}")
+
+# ==========================================
+#  核心邏輯
+# ==========================================
 
 @app.post("/generate-sop")
 async def generate_sop(file: UploadFile = File(...)):
@@ -55,10 +88,13 @@ async def generate_sop(file: UploadFile = File(...)):
     """
     file_id = str(uuid.uuid4())
     original_filename = file.filename
-    ext = os.path.splitext(original_filename)[1].lower()
+    # 修正：處理沒有副檔名的情況
+    _, ext = os.path.splitext(original_filename)
+    ext = ext.lower() if ext else ""
     
     if ext not in ['.xlsx', '.xls', '.pdf']:
-        raise HTTPException(status_code=400, detail="不支援的檔案格式")
+        # 允許上傳但給予警告
+        logger.warning(f"收到非標準格式檔案: {original_filename}")
 
     temp_input_path = os.path.join(UPLOAD_DIR, f"{file_id}{ext}")
     
@@ -67,7 +103,7 @@ async def generate_sop(file: UploadFile = File(...)):
         with open(temp_input_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         
-        logger.info(f"檔案已接收: {original_filename}")
+        logger.info(f"檔案已接收: {original_filename} -> {temp_input_path}")
         
         # 4. 執行子程序 (強制 UTF-8 環境)
         my_env = os.environ.copy()
@@ -159,4 +195,5 @@ async def download_file(filename: str):
 
 if __name__ == "__main__":
     import uvicorn
+    # 這裡設定跑在 8000 port
     uvicorn.run(app, host="0.0.0.0", port=8000)

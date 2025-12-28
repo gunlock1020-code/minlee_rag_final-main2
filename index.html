@@ -74,8 +74,8 @@
         const downloadSection = document.getElementById('downloadSection');
         const downloadLink = document.getElementById('downloadLink');
 
-        // 請確保這裡的 port 與您運行的 uvicorn 一致 (8000)
-        const API_BASE = "http://127.0.0.1:8000";
+        // ✅ 關鍵修正：設為空字串，讓瀏覽器自動使用當前網址 (解決 127.0.0.1 錯誤)
+        const API_BASE = "";
 
         function addLog(message, type = 'info') {
             const div = document.createElement('div');
@@ -110,6 +110,7 @@
             formData.append('file', file);
 
             try {
+                // 使用相對路徑呼叫 API
                 const response = await fetch(`${API_BASE}/generate-sop`, {
                     method: 'POST',
                     body: formData
@@ -126,11 +127,10 @@
                     progressBar.style.width = '100%';
                     addLog(`🎉 [SUCCESS] SOP 生成成功！`, 'success');
                     
-                    // 顯示下載按鈕並設定正確網址
-                    // 確保 API 回傳的 download_url 有包含開頭斜線
-                    const url = result.download_url.startsWith('http') 
+                    // 修正下載連結路徑
+                    const url = result.download_url.startsWith('/') 
                                 ? result.download_url 
-                                : `${API_BASE}${result.download_url}`;
+                                : `/${result.download_url}`;
                     
                     downloadLink.href = url;
                     downloadSection.classList.remove('hidden');
